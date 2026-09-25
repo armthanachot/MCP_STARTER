@@ -29,14 +29,16 @@ Example client entry:
 | --- | --- |
 | `project_info` | Show root, limits, and available tasks |
 | `file_list` | List visible files with a result limit |
-| `file_read` | Read UTF-8 content or a line range and get SHA-256 |
-| `file_search` | Search literal text across visible files |
+| `file_read` | Read UTF-8 content or a line range, optionally with line numbers, and get SHA-256 |
+| `file_search` | Search literal text across visible files with extension filters and context lines |
 | `file_write` | Create or replace text with a hash guard |
 | `file_replace` | Replace one exact text occurrence with a hash guard |
 | `file_delete` | Delete one file with a hash guard |
 | `task_run` | Run a predefined task without a shell |
 | `git_status` / `git_diff` | Inspect the working tree and a file's diff when the project root is the Git root |
 | `git_publish` | Run `git add -A`, commit with `message`, then `git push` to the current branch's upstream |
+| `document_reader` | Return a signed full URL for PDF, Office, or text documents |
+| `image_reader` | Return a signed full URL for PNG, JPEG, GIF, WebP, or SVG images |
 
 To replace or delete a file, first call `file_read`, then pass its `sha256` as `expectedSha256`. To create a new file, set `createOnly: true`. Batch deletion and arbitrary shell execution are intentionally not exposed.
 
@@ -55,6 +57,8 @@ MCP_TRANSPORT=http MCP_PROJECT_ROOT=/absolute/path/to/project bun run start
 ```
 
 The endpoint is `http://127.0.0.1:3003/mcp`. Set `MCP_PORT` and `MCP_HOST` as needed. When binding beyond loopback, `MCP_TOKEN` is required and clients must send `Authorization: Bearer <token>`. Put a trusted HTTPS proxy and proper authentication in front before exposing it publicly.
+
+`document_reader` and `image_reader` work in HTTP mode. They return full URLs under `/files/` that can be opened with GET or HEAD. Each URL is signed, expires after 15 minutes by default, and stops working if the file changes. Set `MCP_BASE_URL` to the public origin when using a proxy or binding beyond loopback; `MCP_FILE_URL_TTL_SECONDS` accepts 60–3600 seconds. The URL itself grants access until it expires, so treat it as sensitive. The static route supports PDF, Word, Excel, PowerPoint, plain text, Markdown, CSV, PNG, JPEG, GIF, WebP, and SVG. It does not extract document text; clients fetch the file from the URL. In stdio mode, these tools return an error because there is no HTTP file server.
 
 ## Garmin profile
 

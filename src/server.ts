@@ -1,9 +1,11 @@
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import path from "node:path";
 import type { ProjectConfig } from "./config.ts";
 import { Workspace } from "./workspace.ts";
 import { runCommand } from "./process.ts";
 import { assertGitRoot, publishGit } from "./git.ts";
+import type { StaticFiles } from "./static-files.ts";
 
 const ok = (value: unknown): CallToolResult => ({
   content: [{ type: "text", text: JSON.stringify(value) }],
@@ -22,7 +24,7 @@ async function runTask(config: ProjectConfig, name: string) {
   return { name, ...(await runCommand(config, task.command, task.args, task.timeoutMs)) };
 }
 
-export function createServer(config: ProjectConfig): McpServer {
+export function createServer(config: ProjectConfig, staticFiles?: StaticFiles): McpServer {
   const workspace = new Workspace(config);
   const server = new McpServer({ name: "common-workspace-mcp", version: "1.0.0" }, {
     instructions: "Use project_info to discover the workspace and configured tasks. Read a file before replacing or deleting it, then pass its sha256 to guard against stale edits. Review git_status and relevant git_diff results before git_publish; it stages all eligible changes. Paths are relative to the project root.",
@@ -40,38 +42,61 @@ export function createServer(config: ProjectConfig): McpServer {
   }, safe(async ({ path: target, maxResults }) => workspace.list(target, Math.min(maxResults ?? config.maxResults, config.maxResults))));
 
   server.registerTool("file_read", {
-    description: "Read a UTF-8 file and return its sha256. Optional line range keeps large responses small.",
-    inputSchema: z.object({ path: relPath, lineStart: z.number().int().min(1).optional(), lineEnd: z.number().int().min(1).optional() }).strict(),
+    description: "Read a UTF-8 file and return its sha256. Optional line range and line numbers keep responses focused.",
+    inputSchema: z.object({ path: relPath, lineStart: z.number().int().min(1).optional(), lineEnd: z.number().int().min(1).optional(), includeLineNumbers: z.boolean().default(false) }).strict(),
     annotations: { readOnlyHint: true },
-  }, safe(async ({ path: target, lineStart, lineEnd }) => {
+  }, safe(async ({ path: target, lineStart, lineEnd, includeLineNumbers }) => {
     const file = await workspace.read(target);
     const lines = file.content.split(/\r?\n/);
     const start = lineStart ?? 1;
     const end = lineEnd ?? lines.length;
     if (end < start || end > lines.length) throw new Error("Invalid line range.");
-    return { path: target, sha256: file.sha256, bytes: file.bytes, totalLines: lines.length, lineStart: start, lineEnd: end, content: lines.slice(start - 1, end).join("\n") };
+    const selected = lines.slice(start - 1, end);
+    return { path: target, sha256: file.sha256, bytes: file.bytes, totalLines: lines.length, lineStart: start, lineEnd: end, content: includeLineNumbers ? selected.map((line, i) => `${start + i}: ${line}`).join("\n") : selected.join("\n") };
   }));
 
   server.registerTool("file_search", {
-    description: "Search visible UTF-8 files for literal text; results include path, line, and matching content.",
-    inputSchema: z.object({ query: z.string().min(1).max(500), path: relPath.default("."), caseSensitive: z.boolean().default(false), maxResults: z.number().int().min(1).max(200).default(50) }).strict(),
+    description: "Search visible UTF-8 files for literal text, with optional extension filtering and context lines.",
+    inputSchema: z.object({ query: z.string().min(1).max(500), path: relPath.default("."), extensions: z.array(z.string().min(1)).max(20).optional(), caseSensitive: z.boolean().default(false), contextLines: z.number().int().min(0).max(5).default(0), maxResults: z.number().int().min(1).max(200).default(50) }).strict(),
     annotations: { readOnlyHint: true },
-  }, safe(async ({ query, path: searchPath, caseSensitive, maxResults }) => {
+  }, safe(async ({ query, path: searchPath, extensions, caseSensitive, contextLines, maxResults }) => {
     const files = await workspace.list(searchPath);
-    const matches: { path: string; line: number; text: string }[] = [];
+    const selectedExts = extensions?.map(ext => ext.toLowerCase().startsWith(".") ? ext.toLowerCase() : `.${ext.toLowerCase()}`);
+    if (selectedExts?.some(ext => !/^\.[a-z0-9]+$/.test(ext))) throw new Error("Invalid extension filter.");
+    const matches: { path: string; line: number; text: string; context?: { line: number; text: string }[] }[] = [];
     const needle = caseSensitive ? query : query.toLowerCase();
     for (const file of files.paths) {
       if (matches.length >= maxResults) break;
+      if (selectedExts && !selectedExts.includes(path.extname(file).toLowerCase())) continue;
       let content: string;
       try { content = (await workspace.read(file)).content; } catch { continue; }
-      for (const [index, line] of content.split(/\r?\n/).entries()) {
+      const lines = content.split(/\r?\n/);
+      for (const [index, line] of lines.entries()) {
         if ((caseSensitive ? line : line.toLowerCase()).includes(needle)) {
-          matches.push({ path: file, line: index + 1, text: line.slice(0, 500) });
+          const context = contextLines ? lines.slice(Math.max(0, index - contextLines), Math.min(lines.length, index + contextLines + 1))
+            .map((text, offset) => ({ line: Math.max(0, index - contextLines) + offset + 1, text: text.slice(0, 500) })) : undefined;
+          matches.push({ path: file, line: index + 1, text: line.slice(0, 500), ...(context ? { context } : {}) });
           if (matches.length >= maxResults) break;
         }
       }
     }
     return { matches, truncated: files.truncated || matches.length >= maxResults };
+  }));
+
+  server.registerTool("document_reader", {
+    description: "Return a short-lived full static URL for a project PDF, Word, Excel, PowerPoint, or text document. Requires HTTP transport.",
+    inputSchema: z.object({ path: relPath }).strict(), annotations: { readOnlyHint: true, openWorldHint: true },
+  }, safe(async ({ path: target }) => {
+    if (!staticFiles) throw new Error("Static URLs require MCP_TRANSPORT=http.");
+    return staticFiles.urlFor(target, "document");
+  }));
+
+  server.registerTool("image_reader", {
+    description: "Return a short-lived full static URL for a project PNG, JPEG, GIF, WebP, or SVG image. Requires HTTP transport.",
+    inputSchema: z.object({ path: relPath }).strict(), annotations: { readOnlyHint: true, openWorldHint: true },
+  }, safe(async ({ path: target }) => {
+    if (!staticFiles) throw new Error("Static URLs require MCP_TRANSPORT=http.");
+    return staticFiles.urlFor(target, "image");
   }));
 
   server.registerTool("file_write", {
