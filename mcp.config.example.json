@@ -1,0 +1,10 @@
+{
+  "tasks": {
+    "typecheck": { "command": "bun", "args": ["run", "typecheck"], "timeoutMs": 120000 },
+    "test": { "command": "bun", "args": ["test"], "timeoutMs": 120000 }
+  },
+  "denyDirs": [],
+  "denyFiles": [],
+  "maxTextBytes": 2000000,
+  "maxResults": 1000
+}
