@@ -6,6 +6,7 @@ import { Workspace } from "./workspace.ts";
 import { runCommand } from "./process.ts";
 import { assertGitRoot, publishGit } from "./git.ts";
 import type { StaticFiles } from "./static-files.ts";
+import { scaffoldWebProject } from "./scaffold.ts";
 
 const ok = (value: unknown): CallToolResult => ({
   content: [{ type: "text", text: JSON.stringify(value) }],
@@ -136,6 +137,24 @@ export function createServer(config: ProjectConfig, staticFiles?: StaticFiles): 
     inputSchema: z.object({ name: z.string().min(1) }).strict(),
     annotations: { readOnlyHint: false, openWorldHint: false },
   }, safe(async ({ name }) => runTask(config, name)));
+
+  server.registerTool("web_project_init", {
+    description: "Create a TypeScript React/Vite UI and Elysia/PostgreSQL/Drizzle API with a wired customer CRUD module. Monorepo needs projectName; polyrepo needs distinct uiName and apiName. Creates new directories inside MCP_PROJECT_ROOT only; does not install packages or run Git.",
+    inputSchema: z.object({
+      layout: z.enum(["monorepo", "polyrepo"]),
+      projectName: z.string().optional(),
+      uiName: z.string().optional(),
+      apiName: z.string().optional(),
+    }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  }, safe(async ({ layout, projectName, uiName, apiName }) => {
+    if (layout === "monorepo") {
+      if (!projectName || uiName !== undefined || apiName !== undefined) throw new Error("monorepo requires projectName only.");
+      return scaffoldWebProject(workspace, { layout, projectName });
+    }
+    if (!uiName || !apiName || projectName !== undefined) throw new Error("polyrepo requires uiName and apiName only.");
+    return scaffoldWebProject(workspace, { layout, uiName, apiName });
+  }));
 
   server.registerTool("git_status", {
     description: "Show Git working tree status for the project. Read only; requires a Git repository.",

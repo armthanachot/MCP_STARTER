@@ -27,6 +27,7 @@ AI client ── HTTPS ── ngrok ── localhost:3003 ── MCP server
 | `file_replace` | แทนที่ข้อความหนึ่งตำแหน่งในไฟล์ | ข้อความเดิมต้องพบครั้งเดียว และต้องใช้ `expectedSha256` |
 | `file_delete` | ลบไฟล์หนึ่งไฟล์ | ต้องใช้ `expectedSha256`; ไม่ลบโฟลเดอร์ |
 | `task_run` | รัน task ที่กำหนดใน `mcp.config.json` | รับชื่อ task เท่านั้น ไม่รับ shell command อิสระ |
+| `web_project_init` | สร้างโปรเจกต์ TypeScript แบบ monorepo หรือ polyrepo พร้อม React/Vite UI, Elysia API, PostgreSQL/Drizzle, customer CRUD และ `compose.yaml` สำหรับ PostgreSQL บนเครื่อง | สร้างใน `MCP_PROJECT_ROOT` เท่านั้น; ไม่ทับโฟลเดอร์เดิม ไม่เปิด Docker ไม่ติดตั้ง package และไม่รัน Git |
 | `git_status` | ดูสถานะ working tree | Project root ต้องเป็น Git repository root |
 | `git_diff` | ดู diff ของไฟล์ที่ระบุ รวมถึง staged diff | ดูได้ทีละไฟล์ |
 | `git_publish` | `git add -A` → commit ด้วย `message` → push | รวมทุกการเปลี่ยนแปลงที่ Git เห็น; ต้องมี branch และ upstream |
@@ -36,6 +37,25 @@ AI client ── HTTPS ── ngrok ── localhost:3003 ── MCP server
 **การแก้ไฟล์:** เรียก `file_read` ก่อน แล้วนำค่า `sha256` ไปใส่ใน `expectedSha256` เมื่อแก้หรือลบไฟล์ หากไฟล์เปลี่ยนไประหว่างนั้น tool จะปฏิเสธการทำงาน
 
 **การ push:** ตรวจ `git_status` และ `git_diff` ก่อนเรียก `git_publish` เพราะ `git add -A` จะรวมการเปลี่ยนแปลงในโปรเจกต์ทั้งหมด แม้ไม่ได้ทำผ่าน MCP หาก push ไม่สำเร็จ commit จะยังอยู่บนเครื่อง
+
+### 🏗️ สร้างโปรเจกต์เว็บใหม่
+
+เรียก `web_project_init` ด้วย parameter แบบใดแบบหนึ่ง:
+
+| รูปแบบ | Parameter | โครงสร้างที่ได้ |
+| --- | --- | --- |
+| Monorepo | `{ "layout": "monorepo", "projectName": "my-app" }` | `my-app/apps/ui` และ `my-app/apps/api` ใน Bun workspace เดียว |
+| Polyrepo | `{ "layout": "polyrepo", "uiName": "my-ui", "apiName": "my-api" }` | `my-ui` และ `my-api` เป็นโฟลเดอร์อิสระ พร้อมแยกเป็น Git repository ได้ภายหลัง |
+
+ชื่อใช้ตัวพิมพ์เล็ก ตัวเลข และ `-` เท่านั้น โดยขึ้นต้นด้วยตัวอักษร; tool จะปฏิเสธหากชื่อซ้ำหรือโฟลเดอร์มีอยู่แล้ว ทุกโปรเจกต์มี `AGENTS.md`, `.gitignore`, `.env.example` และ README ของตัวเอง
+
+ถ้าต้องการสร้างหลายโปรเจกต์เคียงกัน ให้ตั้ง `MCP_PROJECT_ROOT` เป็น **โฟลเดอร์แม่** ของโปรเจกต์ใหม่ เช่น `/Users/me/projects` ไม่เช่นนั้น tool จะสร้างโปรเจกต์เป็นโฟลเดอร์ลูกของ root ปัจจุบัน
+
+หลังสร้าง ให้ติดตั้ง dependency ด้วย `rtk bun install` (monorepo รันครั้งเดียวที่ root; polyrepo รันในแต่ละโฟลเดอร์), คัดลอก `.env.example` เป็น `.env` ใน UI/API, ตั้ง `DATABASE_URL` แล้วเปิด PostgreSQL ด้วย `rtk docker compose up -d db` จากโฟลเดอร์ที่มี `compose.yaml` (root ของ monorepo หรือโฟลเดอร์ API ของ polyrepo) จากนั้นรัน `rtk bun run db:push` ที่ API หรือ monorepo root แล้วเริ่ม UI/API ตามคำสั่ง `nextSteps` ที่ tool ส่งกลับ หากมี PostgreSQL อยู่แล้ว สามารถข้าม Docker Compose และเปลี่ยน `DATABASE_URL` ให้ชี้ไปที่ DB เดิมได้
+
+`compose.yaml` ใช้ PostgreSQL 17 สำหรับพัฒนาบนเครื่อง, เปิดพอร์ต `5432` เฉพาะ `127.0.0.1` และเก็บข้อมูลใน named volume ค่า user/password/database ตัวอย่างตรงกับ API `.env.example` (`postgres/postgres/app`) อย่าใช้รหัสผ่านตัวอย่างนี้กับระบบที่เปิดสู่ภายนอก Tool สร้างไฟล์เท่านั้น ไม่เปิด container หรือสร้าง `.env` ให้
+
+API มี `GET /health` และ customer CRUD ที่ `/api/customers`; UI มีฟอร์มเพิ่ม/แก้ไขและรายการที่ลบได้ โดยเรียก API ผ่าน `VITE_API_BASE_URL` กฎใน `AGENTS.md` กำหนดให้ AI ใช้ RTK ก่อนทุกคำสั่ง, ไม่รัน Git หากผู้ใช้ไม่ได้สั่งโดยชัดเจน, และปรับโครงสร้าง DB ผ่าน Drizzle schema เท่านั้นโดยไม่เขียน SQL migration เอง
 
 ## ⚙️ Environment variables
 

@@ -27,6 +27,7 @@ test("MCP lists and calls the generic tools", async () => {
     const listed = await call(1, "tools/list", {});
     expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toContain("file_replace");
     expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toContain("git_publish");
+    expect(listed.result.tools.map((tool: { name: string }) => tool.name)).toContain("web_project_init");
     const written = await call(2, "tools/call", { name: "file_write", arguments: { path: "a.py", content: "print('ok')\n", createOnly: true } });
     expect(written.result.isError).toBeFalsy();
     const read = await call(3, "tools/call", { name: "file_read", arguments: { path: "a.py" } });
@@ -47,6 +48,9 @@ test("MCP lists and calls the generic tools", async () => {
     const task = await call(5, "tools/call", { name: "task_run", arguments: { name: "smoke" } });
     expect(task.result.structuredContent.exitCode).toBe(0);
     expect(task.result.structuredContent.stdout).toContain("task-ok");
+    const initialized = await call(11, "tools/call", { name: "web_project_init", arguments: { layout: "monorepo", projectName: "mcp-demo" } });
+    expect(initialized.result.structuredContent.paths.api).toBe("mcp-demo/apps/api");
+    expect(await fs.readFile(path.join(root, "mcp-demo/apps/api/.env.example"), "utf8")).toContain("DATABASE_URL");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
